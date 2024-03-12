@@ -1,0 +1,11 @@
+python-binance
+python-dotenv
+coinbase-advanced-py
+datetime
+urllib3
+datetime
+matplotlib
+pandas
+PyQt5
+joblib
+numpy
