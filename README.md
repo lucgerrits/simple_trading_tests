@@ -1,3 +1,6 @@
+# simple_trading_tests
+
+This is a simple trading test on BTC/USDT using extream basic strategies.
 
 ```bash
 python3 -m venv .venv
