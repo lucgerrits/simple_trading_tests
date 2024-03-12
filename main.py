@@ -1,3 +1,4 @@
+import multiprocessing
 import os
 from dotenv import load_dotenv
 from datetime import datetime
@@ -7,15 +8,17 @@ import matplotlib.pyplot as plt
 from binance.client import Client
 import joblib
 import numpy as np
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
 from itertools import product
+
+multiprocessing.set_start_method('fork')
 
 load_dotenv()
 
 # Binance API and Secret Keys
 api_key = os.getenv('BINANCE_API_KEY')
 api_secret = os.getenv('BINANCE_API_SECRET')
-enable_cache = True
+enable_cache = False
 start_date = datetime(2020, 1, 1)
 # Binance Client
 client = Client(api_key, api_secret)
@@ -33,7 +36,7 @@ def get_btc_price_df(start, end, interval):
     return btc_price_df
 
 # Cache the BTC price data
-btc_price_df_cache_file = 'btc_price_df_cache.pkl'
+btc_price_df_cache_file = str(start_date.year) + '-btc_price_df_cache.pkl'
 if os.path.exists(btc_price_df_cache_file) and enable_cache:
     btc_price_df = joblib.load(btc_price_df_cache_file)
 else:
@@ -43,6 +46,22 @@ else:
 
 #################################################################################################################
     
+def apply_strategy_just_hold(nothing, initial_owned_usdt):
+    # print(f"Applying strategy with initial_owned_usdt={initial_owned_usdt}")
+    # just hold the initial amount of BTC that can be bought with the initial USDT
+    initial_btc_price = btc_price_df['close'].iloc[0]
+    initial_btc_quantity = initial_owned_usdt / initial_btc_price
+    final_portfolio_value = initial_btc_quantity * btc_price_df['close'].iloc[-1]
+    portfolio_history = []
+    buy_signals = []
+    buy_signals.append(btc_price_df.index[0])
+
+    for timestamp, current_price in btc_price_df['close'].items():
+        portfolio_history.append((timestamp, initial_btc_quantity * current_price))
+    portfolio_history_df = pd.DataFrame(portfolio_history, columns=['timestamp', 'value']).set_index('timestamp')
+    final_portfolio_value = portfolio_history_df['value'].iloc[-1]
+    return final_portfolio_value, portfolio_history_df, buy_signals, []
+
 def apply_strategy(sell_percentage, buy_percentage, initial_owned_usdt):
     # print(f"Applying strategy with sell_percentage={sell_percentage}, buy_percentage={buy_percentage}, initial_owned_usdt={initial_owned_usdt}")
     previous_price = btc_price_df['close'].iloc[0]
@@ -114,128 +133,156 @@ def apply_strategy_with_volume(sell_percentage, buy_percentage, initial_owned_us
     final_portfolio_value = portfolio_history_df['value'].iloc[-1]
     return final_portfolio_value, portfolio_history_df, buy_signals, sell_signals
 
-#################################################################################################################
+def apply_strategy_with_volume_and_macd(sell_percentage, buy_percentage, initial_owned_usdt, volume_factor, macd_fast, macd_slow, macd_signal):
+    previous_price = btc_price_df['close'].iloc[0]
+    previous_volume = btc_price_df['volume'].iloc[0]
+    last_action = "HOLD"
+    quantity_owned_btc = 0
+    quantity_owned_usdt = initial_owned_usdt
+    portfolio_history = []
+    buy_signals = []
+    sell_signals = []
 
-# Function to execute for each combination of parameters
-# def execute_strategy(params):
-#     sell_percentage, buy_percentage, initial_owned_usdt = params
-#     portfolio_history_df, buy_signals, sell_signals = apply_strategy(btc_price_df, sell_percentage, buy_percentage, initial_owned_usdt)
-#     # portfolio_history_df, buy_signals, sell_signals = apply_strategy_with_volume(btc_price_df, sell_percentage, buy_percentage, initial_owned_usdt, 0.1)
-#     final_portfolio_value = portfolio_history_df['value'].iloc[-1]
-#     return (sell_percentage, buy_percentage, initial_owned_usdt, final_portfolio_value)
+    # Calculate MACD components
+    exp1 = btc_price_df['close'].ewm(span=macd_fast, adjust=False).mean()
+    exp2 = btc_price_df['close'].ewm(span=macd_slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal = macd.ewm(span=macd_signal, adjust=False).mean()
 
-# def run_optimization(sell_percentage_range, buy_percentage_range, initial_owned_usdt_range):
-#     # Flatten the parameter space to a list of tuples. Each tuple will represent a single combination of parameters.
-#     parameters = [(sell_percentage, buy_percentage, initial_owned_usdt) 
-#                   for sell_percentage in sell_percentage_range 
-#                   for buy_percentage in buy_percentage_range 
-#                   for initial_owned_usdt in initial_owned_usdt_range]
+    for timestamp, row in btc_price_df.iterrows():
+        current_price = row['close']
+        current_volume = row['volume']
+        current_macd = macd.loc[timestamp]
+        current_signal = signal.loc[timestamp]
+        price_change = (current_price - previous_price) / previous_price
+        volume_change = (current_volume - previous_volume) / previous_volume if previous_volume else 0
 
-#     # Placeholder for storing the results
-#     optimization_results = []
+        # Check conditions for buy and sell signals based on price, volume change, and MACD crossing the signal line
+        if last_action != "SELL" and quantity_owned_btc > 0 and ((current_macd < current_signal and price_change < 0 and abs(price_change) >= sell_percentage and volume_change > volume_factor) or (current_macd < current_signal and current_macd < 0)):
+            last_action = "SELL"
+            quantity_owned_usdt = quantity_owned_btc * current_price
+            quantity_owned_btc = 0
+            sell_signals.append(timestamp)
 
-#     # Use ProcessPoolExecutor to run the strategies in parallel
-#     with ProcessPoolExecutor() as executor:
-#         futures = [executor.submit(execute_strategy, params) for params in parameters]
-#         for future in as_completed(futures):
-#             try:
-#                 result = future.result()
-#                 optimization_results.append(result)
-#             except Exception as exc:
-#                 print(f'Generated an exception: {exc}')
+        elif last_action != "BUY" and quantity_owned_usdt > 0 and ((current_macd > current_signal and price_change > 0 and price_change >= buy_percentage and volume_change > volume_factor) or (current_macd > current_signal and current_macd > 0)):
+            last_action = "BUY"
+            quantity_owned_btc = quantity_owned_usdt / current_price
+            quantity_owned_usdt = 0
+            buy_signals.append(timestamp)
+
+        previous_price = current_price
+        previous_volume = current_volume
+        portfolio_history.append((timestamp, quantity_owned_btc * current_price + quantity_owned_usdt))
     
-#     return optimization_results
-
-# # Run the optimization
-# optimization_results = run_optimization(sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)
-
-# # Find the combination of parameters that resulted in the highest final portfolio value
-# best_parameters = max(optimization_results, key=lambda x: x[3])
-
-# print(f"Best parameters: Sell at {best_parameters[0]*100:.2f}%, Buy at {best_parameters[1]*100:.2f}%, Initial USDT: {best_parameters[2]:.2f}")
-# print(f"Final portfolio value: {best_parameters[3]:.2f} USDT")
-
-# # Apply the best strategy
-# sell_percentage = best_parameters[0]
-# buy_percentage = best_parameters[1]
-# initial_owned_usdt = best_parameters[2]
-# portfolio_history_df, buy_signals, sell_signals = apply_strategy(btc_price_df, sell_percentage, buy_percentage, initial_owned_usdt)
+    portfolio_history_df = pd.DataFrame(portfolio_history, columns=['timestamp', 'value']).set_index('timestamp')
+    final_portfolio_value = portfolio_history_df['value'].iloc[-1]
+    return final_portfolio_value, portfolio_history_df, buy_signals, sell_signals
 
 
+#################################################################################################################
 
 def execute_strategy(strategy_func, params):
     return strategy_func(*params)
 
+# def optimize_strategy(strategy_func, parameter_space):
+#     optimization_results = []
+#     for params in product(*parameter_space):
+#         final_portfolio_value, _, _, _ = strategy_func(*params)
+#         optimization_results.append((params, final_portfolio_value))
+#     best_parameters = max(optimization_results, key=lambda x: x[1])
+#     return best_parameters
+
+def strategy_wrapper(args):
+    """
+    Wrapper function to call the strategy function with a set of parameters.
+    This is necessary for multiprocessing to unpack the arguments correctly.
+    """
+    strategy_func, params = args
+    return strategy_func(*params), params
+
 def optimize_strategy(strategy_func, parameter_space):
     optimization_results = []
-    for params in product(*parameter_space):
-        final_portfolio_value, _, _, _ = strategy_func(*params)
-        optimization_results.append((params, final_portfolio_value))
-    best_parameters = max(optimization_results, key=lambda x: x[1])
-    return best_parameters
+    
+    with ProcessPoolExecutor() as executor:
+        # Prepare a list of arguments for the strategy_wrapper function
+        parameters = product(*parameter_space)
+        parameters_list = list(product(*parameter_space))
+        print("Submitting tasks for optimization. Total tasks:", len(parameters_list))
+        # print number of arguments to be passed to the strategy_wrapper function
+        print("Number of arguments passed to the strategy:", len(parameter_space))
+        futures = [executor.submit(strategy_wrapper, (strategy_func, params))
+                   for params in parameters]
+        print("Submitted tasks for optimization.")
+        for future in as_completed(futures):
+            try:
+                if future.done():
+                    result, params = future.result()
+                    if result is not None:
+                        final_portfolio_value = result[0]  # Unpack the first element of the result tuple
+                        optimization_results.append((params, final_portfolio_value))
+                        # print(f"Task completed successfully for parameters: {params}")
+                    else:
+                        print(f"Warning: Task completed but returned None for parameters: {params}")
+                else:
+                    print("Error: Future did not complete successfully.")
+            except Exception as e:
+                # Print the exception for debugging purposes
+                print(f"An error occurred: {e}")
 
-# Define parameter ranges for testing
-sell_percentage_range = np.arange(0.01, 0.50, 0.01)  # Testing from 1% to 5% in 1% increments
-buy_percentage_range = np.arange(0.01, 0.50, 0.01)   # Testing from 1% to 5% in 1% increments
-initial_owned_usdt_range = np.array([100]) #np.arange(100, 1000, 100)  # Testing from 100 to 1000 in 100 increments
-volume_factor_range = np.array([0.1])
+    if optimization_results:
+        # Find the best parameter set
+        best_parameters = max(optimization_results, key=lambda x: x[1])
+        worst_parameters = min(optimization_results, key=lambda x: x[1])
+        return (best_parameters, worst_parameters)
+    else:
+        print("No optimization results were produced.")
+        return None
 
 def main():
+    # Define parameter ranges for testing
+    sell_percentage_range = np.arange(0.01, 0.20, 0.01)  # Testing from 1% to 5% in 1% increments
+    buy_percentage_range = np.arange(0.01, 0.20, 0.01)   # Testing from 1% to 5% in 1% increments
+    initial_owned_usdt_range = np.array([100]) #np.arange(100, 1000, 100)  # Testing from 100 to 1000 in 100 increments
+    volume_factor_range = np.arange(0.01, 0.2, 0.05)
+    macd_fast_range = np.arange(8, 17, 3)
+    macd_slow_range = np.arange(20, 31, 3)
+    macd_signal_range = np.arange(6, 13, 2)
+
     strategies = {
-        "strategy_1": (apply_strategy, (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
-        "strategy_2": (apply_strategy_with_volume, (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
+        # "strategy_0": (apply_strategy_just_hold, "Only hold", (np.array([0]), initial_owned_usdt_range)),
+        # "strategy_1": (apply_strategy, "Simple up/down", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
+        # "strategy_2": (apply_strategy_with_volume, "Up/Down with volume", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
+        # "strategy_3": (apply_strategy_with_volume_and_macd, "Up/Down+Volume+MACD", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range, macd_fast_range, macd_slow_range, macd_signal_range))        
     }
     
     strategy_best_results = {}
+    strategy_worst_results = {}
 
-    for name, (strategy_func, param_ranges) in strategies.items():
+    for name, (strategy_func, description, param_ranges) in strategies.items():
         # Unpack the parameter ranges as needed for each strategy
         best_parameters = optimize_strategy(strategy_func, param_ranges)
-        strategy_best_results[name] = execute_strategy(strategy_func, best_parameters[0])
-    
-    # Plot the results
-    plt.figure(figsize=(12, 8))
-    
-    for name, (portfolio_history_df, _, _) in strategy_best_results.items():
-        plt.plot(portfolio_history_df["timestamp"], portfolio_history_df['value'], label=name)
-    
-    plt.title('Comparison of Portfolio Performances for Different Strategies')
-    plt.xlabel('Time')
-    plt.ylabel('Portfolio Value')
-    plt.legend()
-    plt.show()
+        strategy_best_results[name] = (description, best_parameters[0][0], execute_strategy(strategy_func, best_parameters[0][0]))
+        strategy_worst_results[name] = (description, best_parameters[1][0], execute_strategy(strategy_func, best_parameters[1][0]))
+
+    # manually set params for a strategy
+    my_params = (0.09, 0.11, 100, 0.11, 11, 23, 12)
+    strategy_best_results['strategy_99'] = ('Up/Down+Volume+MACD', my_params, execute_strategy(apply_strategy_with_volume_and_macd, my_params))
+
+
+    if os.path.exists(str(start_date.year) + '-strategy_best_results.pkl'):
+        previous_strategy_best_results = joblib.load(str(start_date.year) + '-strategy_best_results.pkl')
+        strategy_best_results = {**previous_strategy_best_results, **strategy_best_results}
+    if os.path.exists(str(start_date.year) + '-strategy_worst_results.pkl'):
+        previous_strategy_worst_results = joblib.load(str(start_date.year) + '-strategy_worst_results.pkl')
+        strategy_worst_results = {**previous_strategy_worst_results, **strategy_worst_results}
+    # save the best results
+    joblib.dump(strategy_best_results, str(start_date.year) + '-strategy_best_results.pkl')
+    joblib.dump(strategy_worst_results, str(start_date.year) + '-strategy_worst_results.pkl')
+
+    # Print the best results
+    for name, (description, params, (final_portfolio_value, portfolio_history_df, _, _)) in strategy_best_results.items():
+        print(f"Best parameters for {name}: {params} with final portfolio value: {final_portfolio_value:.2f} USDT")
+
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-# # Plot all the data
-# fig, axs = plt.subplots(3, 1, figsize=(12, 8))
-
-# # Plot BTC/USDT on the first subplot
-# axs[0].plot(btc_price_df['close'], label='BTC/USDT')
-# axs[0].set_title('BTC/USDT Price')
-
-# # Plot the price change on the second subplot
-# axs[1].plot(btc_price_df['close'].pct_change(), label='BTC/USDT % Change', color='orange')
-# axs[1].title.set_text('BTC/USDT % Change')
-
-# # Plot the portfolio value on the third subplot
-# axs[2].plot(portfolio_history_df, label='Portfolio Value', color='green')
-# axs[2].title.set_text('Portfolio Value with Buy/Sell Signals (Sell at {:.2f}%, Buy at {:.2f}%, and {} USDT)'.format(sell_percentage*100, buy_percentage*100, initial_owned_usdt))
-# # Add buy and sell signals to the portfolio value plot
-# axs[2].scatter(buy_signals, portfolio_history_df.loc[buy_signals, 'value'], label='Buy Signal', marker='^', color='blue')
-# axs[2].scatter(sell_signals, portfolio_history_df.loc[sell_signals, 'value'], label='Sell Signal', marker='v', color='red')
-
-
-# plt.tight_layout()
-# plt.show()
