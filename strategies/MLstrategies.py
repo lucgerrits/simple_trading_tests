@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.svm import SVC
@@ -51,6 +51,45 @@ class MLstrategies:
             print("Model and scaler loaded from cache.")
         print(f"Test accuracy: {self.test_accuracy:.2f}")
 
+    def optimize_hyperparameters(self, X_train, y_train, search_type='grid', n_iter=10):
+        """
+        Optimizes hyperparameters for the SVM model using either Grid Search or Random Search.
+
+        :param X_train: Training feature data
+        :param y_train: Training target data
+        :param search_type: Type of search ('grid' for GridSearchCV or 'random' for RandomizedSearchCV)
+        :param n_iter: Number of parameter settings sampled for RandomizedSearchCV. Ignored for GridSearchCV.
+        """
+        # Define the model
+        svm = SVC()
+
+        # Define the parameter grid/random search space
+        param_distributions = {
+            'C': [0.1, 1, 10, 100], 
+            'gamma': ['scale', 'auto', 1, 0.1, 0.01, 0.001],
+            'kernel': ['rbf', 'poly', 'sigmoid']
+        }
+        param_distributions = {
+            'C': np.logspace(-2, 2, 5),
+            'gamma': np.logspace(-4, 0, 5),
+            # 'kernel': ['rbf', 'poly', 'sigmoid']
+            'kernel': ['rbf', 'sigmoid']
+        }
+        # Choose between GridSearchCV and RandomizedSearchCV
+        if search_type == 'grid':
+            search = GridSearchCV(svm, param_distributions, cv=5, verbose=2, n_jobs=-1)
+        else:
+            search = RandomizedSearchCV(svm, param_distributions, n_iter=n_iter, cv=5, verbose=2, n_jobs=-1, random_state=42)
+
+        # Perform the search
+        search.fit(X_train, y_train)
+
+        # Print the best parameters and return the best estimator
+        print("Best parameters found:", search.best_params_)
+        print("Best score:", search.best_score_)
+
+        return search.best_estimator_
+
     def preprocess_and_train(self):
         # Feature selection
         features = self.btc_price_df[['close', 'volume', 'macd', 'signal', 'rsi', 'sma_20', 'ema_20', 'close_pct_change']]
@@ -62,7 +101,7 @@ class MLstrategies:
         features_imputed = self.imputer.fit_transform(features)
         
         # Splitting the dataset
-        X_train, X_test, y_train, y_test = train_test_split(features_imputed, labels, test_size=0.2, random_state=42)
+        X_train, X_test, y_train, y_test = train_test_split(features_imputed, labels, test_size=0.1, random_state=42)
         
         # Feature scaling
         scaler = StandardScaler()
@@ -72,7 +111,12 @@ class MLstrategies:
         self.scaler = scaler  # Save scaler for later use
         
         # SVM Model training
-        self.svm_model = SVC(kernel='rbf', C=1.0, probability=True)
+        # self.svm_model = SVC(kernel='rbf', C=1.0, probability=True)
+
+        # self.svm_model = self.optimize_hyperparameters(X_train, y_train, search_type='grid')
+        # Or, for Random Search: 
+        self.svm_model = self.optimize_hyperparameters(X_train, y_train, search_type='random', n_iter=10)
+
         self.svm_model.fit(X_train_scaled, y_train)
         
         # test accuracy for evaluation

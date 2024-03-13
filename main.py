@@ -22,10 +22,12 @@ api_secret = os.getenv('BINANCE_API_SECRET')
 ml_enable_cache = True
 ml_start_date = datetime(2013, 1, 1) # the cache train the model from 2013
 ml_cache_prefix = str(ml_start_date.year) + '-' + str(ml_start_date.month) + '-' + str(ml_start_date.day) + '-'
+ml_stop_date = datetime(2022, 1, 1)
 
-enable_cache = False
-start_date = datetime(2023, 1, 1)
+enable_cache = True
+start_date = datetime(2022, 1, 1)
 cache_prefix = str(start_date.year) + '-' + str(start_date.month) + '-' + str(start_date.day) + '-'
+stop_date = datetime.now()
 
 klines_interval = Client.KLINE_INTERVAL_1HOUR
 # Binance Client
@@ -118,7 +120,7 @@ def main():
     if os.path.exists(cache_prefix + 'btc_price_df_cache.pkl') and enable_cache:
         btc_price_df = joblib.load(cache_prefix + 'btc_price_df_cache.pkl')
     else:
-        btc_price_df = get_btc_price_df(start_date, datetime.now(), klines_interval)
+        btc_price_df = get_btc_price_df(start_date, stop_date, klines_interval)
         # Calculate the indicator values
         calculate_idicator_values(btc_price_df)
         joblib.dump(btc_price_df, cache_prefix + 'btc_price_df_cache.pkl')
@@ -126,7 +128,7 @@ def main():
     if os.path.exists(ml_cache_prefix + 'btc_price_df_cache.pkl') and ml_enable_cache:
         ml_btc_price_df = joblib.load(ml_cache_prefix + 'btc_price_df_cache.pkl')
     else:
-        ml_btc_price_df = get_btc_price_df(ml_start_date, datetime.now(), klines_interval)
+        ml_btc_price_df = get_btc_price_df(ml_start_date, ml_stop_date, klines_interval)
         # Calculate the indicator values
         calculate_idicator_values(ml_btc_price_df)
         joblib.dump(ml_btc_price_df, ml_cache_prefix + 'btc_price_df_cache.pkl')
@@ -135,7 +137,7 @@ def main():
     # print(btc_price_df.columns)
 
     # Create an instance of the Strategies class
-    basic_strategies = Strategies(btc_price_df)
+    basic_strategies = Strategies(ml_btc_price_df) # optimize the strategies with the ml_btc_price_df
     ml_strategies = MLstrategies(ml_btc_price_df, ml_cache_prefix)
     ml_strategies.maybe_train_model(ml_enable_cache)
     ml_strategies.btc_price_df = btc_price_df # Use the same btc_price_df for the ML strategies as the basic strategies
@@ -146,31 +148,37 @@ def main():
 
     # Define parameter ranges for testing
     initial_owned_usdt_range = np.array([100]) #np.arange(100, 1000, 100)  # Testing from 100 to 1000 in 100 increments
-    # sell_percentage_range = np.arange(0.01, 0.20, 0.01)  # Testing from 1% to 5% in 1% increments
-    # buy_percentage_range = np.arange(0.01, 0.20, 0.01)   # Testing from 1% to 5% in 1% increments
-    # volume_factor_range = np.arange(0.01, 0.2, 0.05)
-    # macd_fast_range = np.arange(8, 17, 3)
-    # macd_slow_range = np.arange(20, 31, 3)
-    # macd_signal_range = np.arange(6, 13, 2)
+    sell_percentage_range = np.arange(0.01, 0.20, 0.01)  # Testing from 1% to 5% in 1% increments
+    buy_percentage_range = np.arange(0.01, 0.20, 0.01)   # Testing from 1% to 5% in 1% increments
+    volume_factor_range = np.arange(0.01, 0.2, 0.05)
+    macd_fast_range = np.arange(8, 17, 3)
+    macd_slow_range = np.arange(20, 31, 3)
+    macd_signal_range = np.arange(6, 13, 2)
     strategies_to_optimize = {
-        "strategy_0": (basic_strategies.apply_strategy_just_hold, "Only hold", (initial_owned_usdt_range,)),
-    #     "strategy_1": (basic_strategies.apply_strategy, "Simple up/down", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
-    #     "strategy_2": (basic_strategies.apply_strategy_with_volume, "Up/Down with volume", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
-    #     "strategy_3": (basic_strategies.apply_strategy_with_volume_and_macd, "Up/Down+Volume+MACD", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range, macd_fast_range, macd_slow_range, macd_signal_range))        
+        # "strategy_0": (basic_strategies.apply_strategy_just_hold, "Only hold", (initial_owned_usdt_range,)),
+        # "strategy_1": (basic_strategies.apply_strategy, "Simple up/down", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
+        # "strategy_2": (basic_strategies.apply_strategy_with_volume, "Up/Down with volume", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
+        # "strategy_3": (basic_strategies.apply_strategy_with_volume_and_macd, "Up/Down+Volume+MACD", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range, macd_fast_range, macd_slow_range, macd_signal_range))        
     }
 
     if strategies_to_optimize:
         for name, (strategy_func, description, param_ranges) in strategies_to_optimize.items():
             # Unpack the parameter ranges as needed for each strategy
             best_parameters = optimize_strategy(strategy_func, param_ranges)
+            # run results with the btc_price_df
+            # find a way to run the results with the btc_price_df and not the ml_btc_price_df
+            strategy_func.__self__.btc_price_df = btc_price_df
             strategy_best_results[name] = (description, best_parameters[0][0], execute_strategy(strategy_func, best_parameters[0][0]))
             strategy_worst_results[name] = (description, best_parameters[1][0], execute_strategy(strategy_func, best_parameters[1][0]))
 
     # manually set params for a strategy
     # my_params = (0.09, 0.11, 100, 0.11, 11, 23, 12)
     # strategy_best_results['strategy_99'] = ('Up/Down+Volume+MACD', my_params, execute_strategy(basic_strategies.apply_strategy_with_volume_and_macd, my_params))
-    my_params = (100,)
-    strategy_best_results['strategy_svm'] = ('ML SVM', my_params, execute_strategy(ml_strategies.apply_svm_strategy, my_params))
+    
+    # Add ML strategies
+    if strategy_best_results['strategy_1'] is None:
+        my_params = (100,)
+        strategy_best_results['strategy_svm'] = ('ML SVM', my_params, execute_strategy(ml_strategies.apply_svm_strategy, my_params))
 
 
     if os.path.exists(cache_prefix + 'strategy_best_results.pkl'):
