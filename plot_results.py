@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import joblib
+from tabulate import tabulate
 
 prefix = '2022-1-1-'
 # btc_price_df = joblib.load('btc_price_df_cache.pkl')
@@ -14,9 +15,28 @@ strategy_worst_results = joblib.load(prefix + 'strategy_worst_results.pkl')
 strategy_best_results = dict(sorted(strategy_best_results.items(), key=lambda item: item[0]))
 strategy_worst_results = dict(sorted(strategy_worst_results.items(), key=lambda item: item[0]))
 
-def format_tuple_floats(t):
-    return tuple(map(lambda x: isinstance(x, float) and round(x, 2) or x, t))
 
+
+
+####################### Print a beautiful table with the results #######################
+ordered_strategy_best_results = dict(sorted(strategy_best_results.items(), key=lambda item: item[1][2][0], reverse=True))
+initial_portfolio_value = 100
+table_data = []
+for name, (description, params, (final_portfolio_value, portfolio_history_df, buy_signals, sell_signals)) in ordered_strategy_best_results.items():
+    percent_change = ((final_portfolio_value - initial_portfolio_value) / initial_portfolio_value) * 100
+    table_data.append([name, description, f"{percent_change:.2f}%"])
+
+# Print the table
+print('Initial Portfolio Value:', initial_portfolio_value)
+print(tabulate(table_data, headers=['Strategy Name', 'Description', 'Percentage Change'], tablefmt="grid"))
+
+
+
+######################### Plot the results #########################
+def format_params(t):
+    tb = tuple(map(lambda x: isinstance(x, float) and round(x, 2) or x, t))
+    # join all elements in the tuple with a comma and a space and bracket the result with parentheses
+    return '(' + ', '.join(map(str, tb)) + ')'
 
 # plot in a first figure all data related to btc_price_df
 # Index(['open', 'high', 'low', 'close', 'volume', 'close_time',
@@ -61,17 +81,19 @@ plt.figure(figsize=(9, 6))
 for name, (description, params, (final_portfolio_value, portfolio_history_df, buy_signals, sell_signals)) in strategy_best_results.items():
     # plt.plot(portfolio_history_df.index, portfolio_history_df['value'], label=f"{name} - {final_portfolio_value:.2f} USDT - {params}")
 
-    plt.plot(portfolio_history_df, label=f"{name} - {final_portfolio_value:.2f} USDT - {description} - {format_tuple_floats(params)}")
-    # Add buy and sell signals to the portfolio value plot
-    # plt.scatter(buy_signals, portfolio_history_df.loc[buy_signals, 'value'], label=None, marker='^', color='blue')
-    # plt.scatter(sell_signals, portfolio_history_df.loc[sell_signals, 'value'], label=None, marker='v', color='red')
+    plt.plot(portfolio_history_df, label=f"{name} - {final_portfolio_value:.2f} USDT - {description} - {format_params(params)}")
+    # if name contains "svm"
+    # if "svm" in name:
+    #     # Add buy and sell signals to the portfolio value plot
+    #     plt.scatter(buy_signals, portfolio_history_df.loc[buy_signals, 'value'], label=None, marker='^', color='blue')
+    #     plt.scatter(sell_signals, portfolio_history_df.loc[sell_signals, 'value'], label=None, marker='v', color='red')
 plt.legend()
 plt.title('Best Strategies')
 
 # for name, (description, params, (final_portfolio_value, portfolio_history_df, buy_signals, sell_signals)) in strategy_worst_results.items():
 #     # plt.plot(portfolio_history_df.index, portfolio_history_df['value'], label=f"{name} - {final_portfolio_value:.2f} USDT - {params}")
 
-#     axs[1].plot(portfolio_history_df, label=f"{name} - {final_portfolio_value:.2f} USDT - {description} - {format_tuple_floats(params)}")
+#     axs[1].plot(portfolio_history_df, label=f"{name} - {final_portfolio_value:.2f} USDT - {description} - {format_params(params)}")
 #     # Add buy and sell signals to the portfolio value plot
 #     axs[1].scatter(buy_signals, portfolio_history_df.loc[buy_signals, 'value'], label=None, marker='^', color='blue')
 #     axs[1].scatter(sell_signals, portfolio_history_df.loc[sell_signals, 'value'], label=None, marker='v', color='red')

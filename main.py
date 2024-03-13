@@ -9,7 +9,8 @@ import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import product
 from strategies.strategies import Strategies
-from strategies.MLstrategies import MLstrategies
+from strategies.SVMstrategies import SVMstrategies
+from strategies.RFStrategies import RFstrategies
 
 multiprocessing.set_start_method('fork')
 
@@ -20,16 +21,18 @@ api_key = os.getenv('BINANCE_API_KEY')
 api_secret = os.getenv('BINANCE_API_SECRET')
 
 ml_enable_cache = True
+ml_enable_train_cache = True
 ml_start_date = datetime(2013, 1, 1) # the cache train the model from 2013
 ml_cache_prefix = str(ml_start_date.year) + '-' + str(ml_start_date.month) + '-' + str(ml_start_date.day) + '-'
 ml_stop_date = datetime(2022, 1, 1)
 
 enable_cache = True
+enable_basic_strat_opti_cache = True
 start_date = datetime(2022, 1, 1)
 cache_prefix = str(start_date.year) + '-' + str(start_date.month) + '-' + str(start_date.day) + '-'
 stop_date = datetime.now()
 
-klines_interval = Client.KLINE_INTERVAL_1HOUR
+klines_interval = Client.KLINE_INTERVAL_6HOUR
 # Binance Client
 client = Client(api_key, api_secret)
 
@@ -115,6 +118,25 @@ def optimize_strategy(strategy_func, parameter_space):
         print("No optimization results were produced.")
         return None
 
+def store_results(strategy_best_results, strategy_worst_results):
+    # Load previous results and update them
+    if os.path.exists(cache_prefix + 'strategy_best_results.pkl'):
+        previous_strategy_best_results = joblib.load(cache_prefix + 'strategy_best_results.pkl')
+        strategy_best_results = {**previous_strategy_best_results, **strategy_best_results}
+    if os.path.exists(cache_prefix + 'strategy_worst_results.pkl'):
+        previous_strategy_worst_results = joblib.load(cache_prefix + 'strategy_worst_results.pkl')
+        strategy_worst_results = {**previous_strategy_worst_results, **strategy_worst_results}
+
+    # Save the updated results
+    joblib.dump(strategy_best_results, cache_prefix + 'strategy_best_results.pkl')
+    joblib.dump(strategy_worst_results, cache_prefix + 'strategy_worst_results.pkl')
+    return strategy_best_results, strategy_worst_results
+
+def format_params(t):
+    tb = tuple(map(lambda x: isinstance(x, float) and round(x, 2) or x, t))
+    # join all elements in the tuple with a comma and a space and bracket the result with parentheses
+    return '(' + ', '.join(map(str, tb)) + ')'
+
 def main():
     # Cache the BTC price data
     if os.path.exists(cache_prefix + 'btc_price_df_cache.pkl') and enable_cache:
@@ -138,64 +160,95 @@ def main():
 
     # Create an instance of the Strategies class
     basic_strategies = Strategies(ml_btc_price_df) # optimize the strategies with the ml_btc_price_df
-    ml_strategies = MLstrategies(ml_btc_price_df, ml_cache_prefix)
-    ml_strategies.maybe_train_model(ml_enable_cache)
-    ml_strategies.btc_price_df = btc_price_df # Use the same btc_price_df for the ML strategies as the basic strategies
 
     strategy_best_results = {}
     strategy_worst_results = {}
     strategies_to_optimize = {}
+    strategy_best_results, strategy_worst_results = store_results(strategy_best_results, strategy_worst_results)
 
     # Define parameter ranges for testing
     initial_owned_usdt_range = np.array([100]) #np.arange(100, 1000, 100)  # Testing from 100 to 1000 in 100 increments
-    sell_percentage_range = np.arange(0.01, 0.20, 0.01)  # Testing from 1% to 5% in 1% increments
-    buy_percentage_range = np.arange(0.01, 0.20, 0.01)   # Testing from 1% to 5% in 1% increments
-    volume_factor_range = np.arange(0.01, 0.2, 0.05)
+    sell_percentage_range = np.arange(0.001, 0.05, 0.001)  # Testing from 1% to 5% in 1% increments
+    buy_percentage_range = np.arange(0.001, 0.05, 0.001)   # Testing from 1% to 5% in 1% increments
+    volume_factor_range = np.arange(0.01, 0.1, 0.05)
     macd_fast_range = np.arange(8, 17, 3)
-    macd_slow_range = np.arange(20, 31, 3)
-    macd_signal_range = np.arange(6, 13, 2)
+    macd_slow_range = np.arange(20, 31, 4)
+    macd_signal_range = np.arange(6, 13, 3)
     strategies_to_optimize = {
-        # "strategy_0": (basic_strategies.apply_strategy_just_hold, "Only hold", (initial_owned_usdt_range,)),
-        # "strategy_1": (basic_strategies.apply_strategy, "Simple up/down", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
-        # "strategy_2": (basic_strategies.apply_strategy_with_volume, "Up/Down with volume", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
+        "strategy_0": (basic_strategies.apply_strategy_just_hold, "Only hold", (initial_owned_usdt_range,)),
+        "strategy_1": (basic_strategies.apply_strategy, "Simple up/down", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
+        "strategy_2": (basic_strategies.apply_strategy_with_volume, "Up/Down with volume", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
+        # this one takes too long to run:
         # "strategy_3": (basic_strategies.apply_strategy_with_volume_and_macd, "Up/Down+Volume+MACD", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range, macd_fast_range, macd_slow_range, macd_signal_range))        
     }
 
     if strategies_to_optimize:
         for name, (strategy_func, description, param_ranges) in strategies_to_optimize.items():
-            # Unpack the parameter ranges as needed for each strategy
-            best_parameters = optimize_strategy(strategy_func, param_ranges)
-            # run results with the btc_price_df
-            # find a way to run the results with the btc_price_df and not the ml_btc_price_df
-            strategy_func.__self__.btc_price_df = btc_price_df
-            strategy_best_results[name] = (description, best_parameters[0][0], execute_strategy(strategy_func, best_parameters[0][0]))
-            strategy_worst_results[name] = (description, best_parameters[1][0], execute_strategy(strategy_func, best_parameters[1][0]))
+            if name not in strategy_best_results or not enable_basic_strat_opti_cache:
+                # Unpack the parameter ranges as needed for each strategy
+                best_parameters = optimize_strategy(strategy_func, param_ranges)
+                # run results with the btc_price_df
+                # find a way to run the results with the btc_price_df and not the ml_btc_price_df
+                strategy_func.__self__.btc_price_df = btc_price_df
+                strategy_best_results[name] = (description, best_parameters[0][0], execute_strategy(strategy_func, best_parameters[0][0]))
+                strategy_worst_results[name] = (description, best_parameters[1][0], execute_strategy(strategy_func, best_parameters[1][0]))
+                strategy_best_results, strategy_worst_results = store_results(strategy_best_results, strategy_worst_results)
 
     # manually set params for a strategy
     # my_params = (0.09, 0.11, 100, 0.11, 11, 23, 12)
     # strategy_best_results['strategy_99'] = ('Up/Down+Volume+MACD', my_params, execute_strategy(basic_strategies.apply_strategy_with_volume_and_macd, my_params))
     
     # Add ML strategies
-    if strategy_best_results['strategy_1'] is None:
+    if 'strategy_svm_0' not in strategy_best_results:
+        features = ['close', 'volume', 'macd', 'close_pct_change']
+        ml_svn_strategies_0 = SVMstrategies(ml_btc_price_df, "0_" + ml_cache_prefix, features)
+        ml_svn_strategies_0.maybe_train_model(ml_enable_train_cache)
+        ml_svn_strategies_0.btc_price_df = btc_price_df # Use the same btc_price_df for the ML strategies as the basic strategies
         my_params = (100,)
-        strategy_best_results['strategy_svm'] = ('ML SVM', my_params, execute_strategy(ml_strategies.apply_svm_strategy, my_params))
+        print("Running ML strategy with features:", features)
+        strategy_best_results['strategy_svm_0'] = ('ML SVM n°0', my_params, execute_strategy(ml_svn_strategies_0.apply_svm_strategy, my_params))
+        strategy_best_results, strategy_worst_results = store_results(strategy_best_results, strategy_worst_results)
+        del ml_svn_strategies_0
+    # if 'strategy_svm_1' not in strategy_best_results:
+    #     features = ['close', 'volume']
+    #     ml_svn_strategies_1 = SVMstrategies(ml_btc_price_df, "1_" + ml_cache_prefix, features)
+    #     ml_svn_strategies_1.maybe_train_model(ml_enable_train_cache)
+    #     ml_svn_strategies_1.btc_price_df = btc_price_df # Use the same btc_price_df for the ML strategies as the basic strategies
+    #     my_params = (100,)
+    #     print("Running ML strategy with features:", features)
+    #     strategy_best_results['strategy_svm_1'] = ('ML SVM n°1', my_params, execute_strategy(ml_svn_strategies_1.apply_svm_strategy, my_params))
+    #     strategy_best_results, strategy_worst_results = store_results(strategy_best_results, strategy_worst_results)
+    #     del ml_svn_strategies_1
+
+    if 'strategy_rf_0' not in strategy_best_results or True:
+        features = ['close', 'volume']
+        ml_rf_strategies_0 = RFstrategies(ml_btc_price_df, "0_" + ml_cache_prefix, features)
+        ml_rf_strategies_0.maybe_train_model(False)
+        ml_rf_strategies_0.btc_price_df = btc_price_df # Use the same btc_price_df for the ML strategies as the basic strategies
+        my_params = (100,)
+        print("Running ML RF strategy with features:", features)
+        strategy_best_results['strategy_rf_0'] = ('ML RF n°0', my_params, execute_strategy(ml_rf_strategies_0.apply_rf_strategy, my_params))
+        strategy_best_results, strategy_worst_results = store_results(strategy_best_results, strategy_worst_results)
+        del ml_rf_strategies_0
+
+    if 'strategy_rf_1' not in strategy_best_results or True:
+        features = ['close', 'volume', 'macd', 'close_pct_change']
+        ml_rf_strategies_1 = RFstrategies(ml_btc_price_df, "1_" + ml_cache_prefix, features)
+        ml_rf_strategies_1.maybe_train_model(False)
+        ml_rf_strategies_1.btc_price_df = btc_price_df # Use the same btc_price_df for the ML strategies as the basic strategies
+        my_params = (100,)
+        print("Running ML RF strategy with features:", features)
+        strategy_best_results['strategy_rf_1'] = ('ML RF n°1', my_params, execute_strategy(ml_rf_strategies_1.apply_rf_strategy, my_params))
+        strategy_best_results, strategy_worst_results = store_results(strategy_best_results, strategy_worst_results)
+        del ml_rf_strategies_1
 
 
-    if os.path.exists(cache_prefix + 'strategy_best_results.pkl'):
-        previous_strategy_best_results = joblib.load(cache_prefix + 'strategy_best_results.pkl')
-        strategy_best_results = {**previous_strategy_best_results, **strategy_best_results}
-    if os.path.exists(cache_prefix + 'strategy_worst_results.pkl'):
-        previous_strategy_worst_results = joblib.load(cache_prefix + 'strategy_worst_results.pkl')
-        strategy_worst_results = {**previous_strategy_worst_results, **strategy_worst_results}
-    # save the best results
-    joblib.dump(strategy_best_results, cache_prefix + 'strategy_best_results.pkl')
-    joblib.dump(strategy_worst_results, cache_prefix + 'strategy_worst_results.pkl')
 
     # order by strategy_best_results final_portfolio_value
-    strategy_best_results = dict(sorted(strategy_best_results.items(), key=lambda item: item[1][2][0], reverse=True))
+    strategy_best_results = dict(sorted(strategy_best_results.items(), key=lambda item: item[1][2][0], reverse=False))
     # Print the best results
-    for name, (description, params, (final_portfolio_value, portfolio_history_df, _, _)) in strategy_best_results.items():
-        print(f"Best parameters for {name}: {params} with final portfolio value: {final_portfolio_value:.2f} USDT")
+    for name, (description, params, (final_portfolio_value, _, _, _)) in strategy_best_results.items():
+        print(f"{name}\tFinal portfolio value: {final_portfolio_value:.2f} USDT - Best parameters: {format_params(params)}")
 
 
 if __name__ == "__main__":

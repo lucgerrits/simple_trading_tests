@@ -10,3 +10,5 @@ PyQt5
 joblib
 numpy
 scikit-learn
+seaborn
+tabulate
