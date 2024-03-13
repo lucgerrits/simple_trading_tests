@@ -108,8 +108,10 @@ def main():
     macd_fast_range = np.arange(8, 17, 3)
     macd_slow_range = np.arange(20, 31, 3)
     macd_signal_range = np.arange(6, 13, 2)
+
     all_strategies = Strategies(btc_price_df)
-    strategies = {
+    
+    strategies_to_optimize = {
         "strategy_0": (all_strategies.apply_strategy_just_hold, "Only hold", (np.array([0]), initial_owned_usdt_range)),
         "strategy_1": (all_strategies.apply_strategy, "Simple up/down", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
         "strategy_2": (all_strategies.apply_strategy_with_volume, "Up/Down with volume", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
@@ -119,7 +121,7 @@ def main():
     strategy_best_results = {}
     strategy_worst_results = {}
 
-    for name, (strategy_func, description, param_ranges) in strategies.items():
+    for name, (strategy_func, description, param_ranges) in strategies_to_optimize.items():
         # Unpack the parameter ranges as needed for each strategy
         best_parameters = optimize_strategy(strategy_func, param_ranges)
         strategy_best_results[name] = (description, best_parameters[0][0], execute_strategy(strategy_func, best_parameters[0][0]))
@@ -127,7 +129,7 @@ def main():
 
     # manually set params for a strategy
     my_params = (0.09, 0.11, 100, 0.11, 11, 23, 12)
-    strategy_best_results['strategy_99'] = ('Up/Down+Volume+MACD', my_params, execute_strategy(apply_strategy_with_volume_and_macd, my_params))
+    strategy_best_results['strategy_99'] = ('Up/Down+Volume+MACD', my_params, execute_strategy(all_strategies.apply_strategy_with_volume_and_macd, my_params))
 
 
     if os.path.exists(str(start_date.year) + '-strategy_best_results.pkl'):
