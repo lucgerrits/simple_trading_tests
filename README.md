@@ -23,28 +23,28 @@ First of:
 
 The Buy and Hold strategy is the simplest strategy. It consists of buying the asset and holding it for a long period of time. In this case, we buy BTC/USDT and hold it for the entire period.
 
-Result: 100 USDT of BTC in 2022-01-01 would be worth 156 USDT of BTC in 2024-03-13.
+Result: 100 USDT of BTC in 2022-01-01 would be **worth 156 USDT of BTC** in 2024-03-13.
 
 ### 2. Buy and Sell based on change in price
 
 The strategy is to buy BTC/USDT when the price changes by more than X percent and sell when the price changes by less than X percent.
-When optimizing we find that best is to buy with a increase of 0.5% and sell with a decrease of 0.5%.
+When optimizing we find that best is to buy with a increase of 1% and sell with a decrease of 12%.
 
-Result: 100 USDT of BTC in 2022-01-01 would be worth 100 USDT of BTC in 2024-03-13.
+Result: 100 USDT of BTC in 2022-01-01 would be **worth 100 USDT of BTC** in 2024-03-13.
 
 ### 3. Buy and Sell based on change in price and volume
 
 Same as before, but add the volume rate change.
-When optimizing we find that best is to buy with a increase of 0.5% and sell with a decrease of 0.5%. Also, buy with a volume increase of 0.5% and sell with a volume decrease of 0.5%.
+When optimizing we find that best is to buy with a increase of 6% and sell with a decrease of 5%. Also, buy with a volume increase of 11% and sell with a volume decrease of 11%.
 
-Result: 100 USDT of BTC in 2022-01-01 would be worth 100 USDT of BTC in 2024-03-13.
+Result: 100 USDT of BTC in 2022-01-01 would be **worth 370 USDT of BTC** in 2024-03-13.
 
 ### 4. Buy and Sell based on change in price and volume and MACD
 
 Same as before, but add the MACD indicator.
-When optimizing we find that best is to buy with a increase of 0.5% and sell with a decrease of 0.5%. Also, buy with a volume increase of 0.5% and sell with a volume decrease of 0.5%. Also, buy when MACD is positive and sell when MACD is negative.
+When optimizing we find that best is to buy with a increase of 0.5% and sell with a decrease of %. Also, buy with a volume increase of % and sell with a volume decrease of %. Also, buy when MACD is positive and sell when MACD is negative.
 
-Result: 100 USDT of BTC in 2022-01-01 would be worth 100 USDT of BTC in 2024-03-13.
+Result: 100 USDT of BTC in 2022-01-01 would be **worth 100 USDT of BTC** in 2024-03-13.
 
 ### 5. SVM based on multiple features
 
@@ -53,7 +53,7 @@ Feature list: ['close', 'volume', 'macd', 'signal', 'rsi', 'sma_20', 'ema_20', '
 
 We optimize hyperparameters for the SVM model using random search. Test accuracy is 0.55.
 
-Result: 100 USDT of BTC in 2022-01-01 would be worth 100 USDT of BTC in 2024-03-13.
+Result: 100 USDT of BTC in 2022-01-01 would be **worth 81 USDT of BTC** in 2024-03-13.
 
 #### 5.2. ['close', 'volume', 'macd', 'rsi']
 
