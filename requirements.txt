@@ -9,3 +9,4 @@ pandas
 PyQt5
 joblib
 numpy
+scikit-learn

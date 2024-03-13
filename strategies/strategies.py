@@ -5,7 +5,7 @@ class Strategies:
     def __init__(self, btc_price_df):
         self.btc_price_df = btc_price_df
 
-    def apply_strategy_just_hold(self, nothing, initial_owned_usdt):
+    def apply_strategy_just_hold(self, initial_owned_usdt):
         # print(f"Applying strategy with initial_owned_usdt={initial_owned_usdt}")
         # just hold the initial amount of BTC that can be bought with the initial USDT
         initial_btc_price = self.btc_price_df['close'].iloc[0]

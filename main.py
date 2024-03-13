@@ -9,6 +9,7 @@ import numpy as np
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import product
 from strategies.strategies import Strategies
+from strategies.MLstrategies import MLstrategies
 
 multiprocessing.set_start_method('fork')
 
@@ -17,8 +18,16 @@ load_dotenv()
 # Binance API and Secret Keys
 api_key = os.getenv('BINANCE_API_KEY')
 api_secret = os.getenv('BINANCE_API_SECRET')
+
+ml_enable_cache = True
+ml_start_date = datetime(2013, 1, 1) # the cache train the model from 2013
+ml_cache_prefix = str(ml_start_date.year) + '-' + str(ml_start_date.month) + '-' + str(ml_start_date.day) + '-'
+
 enable_cache = False
-start_date = datetime(2019, 1, 1)
+start_date = datetime(2023, 1, 1)
+cache_prefix = str(start_date.year) + '-' + str(start_date.month) + '-' + str(start_date.day) + '-'
+
+klines_interval = Client.KLINE_INTERVAL_1HOUR
 # Binance Client
 client = Client(api_key, api_secret)
 
@@ -34,13 +43,18 @@ def get_btc_price_df(start, end, interval):
     btc_price_df['volume'] = btc_price_df['volume'].astype(float)
     return btc_price_df
 
-# Cache the BTC price data
-btc_price_df_cache_file = str(start_date.year) + '-btc_price_df_cache.pkl'
-if os.path.exists(btc_price_df_cache_file) and enable_cache:
-    btc_price_df = joblib.load(btc_price_df_cache_file)
-else:
-    btc_price_df = get_btc_price_df(start_date, datetime.now(), Client.KLINE_INTERVAL_6HOUR)
-    joblib.dump(btc_price_df, btc_price_df_cache_file)
+def calculate_idicator_values(btc_price_df):
+    btc_price_df['macd'] = btc_price_df['close'].ewm(span=12, adjust=False).mean() - btc_price_df['close'].ewm(span=26, adjust=False).mean()
+    btc_price_df['signal'] = btc_price_df['macd'].ewm(span=9, adjust=False).mean()
+    btc_price_df['histogram'] = btc_price_df['macd'] - btc_price_df['signal']
+    btc_price_df['rsi'] = 100 - (100 / (1 + (btc_price_df['close'] / btc_price_df['close'].shift(1))))
+    btc_price_df['sma_20'] = btc_price_df['close'].rolling(window=20).mean()
+    btc_price_df['sma_50'] = btc_price_df['close'].rolling(window=50).mean()
+    btc_price_df['sma_200'] = btc_price_df['close'].rolling(window=200).mean()
+    btc_price_df['ema_20'] = btc_price_df['close'].ewm(span=20, adjust=False).mean()
+    btc_price_df['ema_50'] = btc_price_df['close'].ewm(span=50, adjust=False).mean()
+    btc_price_df['ema_200'] = btc_price_df['close'].ewm(span=200, adjust=False).mean()
+    btc_price_df['close_pct_change'] = btc_price_df['close'].pct_change()
 
 def execute_strategy(strategy_func, params):
     return strategy_func(*params)
@@ -100,48 +114,77 @@ def optimize_strategy(strategy_func, parameter_space):
         return None
 
 def main():
-    # Define parameter ranges for testing
-    sell_percentage_range = np.arange(0.01, 0.20, 0.01)  # Testing from 1% to 5% in 1% increments
-    buy_percentage_range = np.arange(0.01, 0.20, 0.01)   # Testing from 1% to 5% in 1% increments
-    initial_owned_usdt_range = np.array([100]) #np.arange(100, 1000, 100)  # Testing from 100 to 1000 in 100 increments
-    volume_factor_range = np.arange(0.01, 0.2, 0.05)
-    macd_fast_range = np.arange(8, 17, 3)
-    macd_slow_range = np.arange(20, 31, 3)
-    macd_signal_range = np.arange(6, 13, 2)
+    # Cache the BTC price data
+    if os.path.exists(cache_prefix + 'btc_price_df_cache.pkl') and enable_cache:
+        btc_price_df = joblib.load(cache_prefix + 'btc_price_df_cache.pkl')
+    else:
+        btc_price_df = get_btc_price_df(start_date, datetime.now(), klines_interval)
+        # Calculate the indicator values
+        calculate_idicator_values(btc_price_df)
+        joblib.dump(btc_price_df, cache_prefix + 'btc_price_df_cache.pkl')
+    # cache the ML model data
+    if os.path.exists(ml_cache_prefix + 'btc_price_df_cache.pkl') and ml_enable_cache:
+        ml_btc_price_df = joblib.load(ml_cache_prefix + 'btc_price_df_cache.pkl')
+    else:
+        ml_btc_price_df = get_btc_price_df(ml_start_date, datetime.now(), klines_interval)
+        # Calculate the indicator values
+        calculate_idicator_values(ml_btc_price_df)
+        joblib.dump(ml_btc_price_df, ml_cache_prefix + 'btc_price_df_cache.pkl')
+        
+    # print all columns names
+    # print(btc_price_df.columns)
 
-    all_strategies = Strategies(btc_price_df)
-    
-    strategies_to_optimize = {
-        "strategy_0": (all_strategies.apply_strategy_just_hold, "Only hold", (np.array([0]), initial_owned_usdt_range)),
-        "strategy_1": (all_strategies.apply_strategy, "Simple up/down", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
-        "strategy_2": (all_strategies.apply_strategy_with_volume, "Up/Down with volume", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
-        # "strategy_3": (all_strategies.apply_strategy_with_volume_and_macd, "Up/Down+Volume+MACD", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range, macd_fast_range, macd_slow_range, macd_signal_range))        
-    }
-    
+    # Create an instance of the Strategies class
+    basic_strategies = Strategies(btc_price_df)
+    ml_strategies = MLstrategies(ml_btc_price_df, ml_cache_prefix)
+    ml_strategies.maybe_train_model(ml_enable_cache)
+    ml_strategies.btc_price_df = btc_price_df # Use the same btc_price_df for the ML strategies as the basic strategies
+
     strategy_best_results = {}
     strategy_worst_results = {}
+    strategies_to_optimize = {}
 
-    for name, (strategy_func, description, param_ranges) in strategies_to_optimize.items():
-        # Unpack the parameter ranges as needed for each strategy
-        best_parameters = optimize_strategy(strategy_func, param_ranges)
-        strategy_best_results[name] = (description, best_parameters[0][0], execute_strategy(strategy_func, best_parameters[0][0]))
-        strategy_worst_results[name] = (description, best_parameters[1][0], execute_strategy(strategy_func, best_parameters[1][0]))
+    # Define parameter ranges for testing
+    initial_owned_usdt_range = np.array([100]) #np.arange(100, 1000, 100)  # Testing from 100 to 1000 in 100 increments
+    # sell_percentage_range = np.arange(0.01, 0.20, 0.01)  # Testing from 1% to 5% in 1% increments
+    # buy_percentage_range = np.arange(0.01, 0.20, 0.01)   # Testing from 1% to 5% in 1% increments
+    # volume_factor_range = np.arange(0.01, 0.2, 0.05)
+    # macd_fast_range = np.arange(8, 17, 3)
+    # macd_slow_range = np.arange(20, 31, 3)
+    # macd_signal_range = np.arange(6, 13, 2)
+    strategies_to_optimize = {
+        "strategy_0": (basic_strategies.apply_strategy_just_hold, "Only hold", (initial_owned_usdt_range,)),
+    #     "strategy_1": (basic_strategies.apply_strategy, "Simple up/down", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
+    #     "strategy_2": (basic_strategies.apply_strategy_with_volume, "Up/Down with volume", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
+    #     "strategy_3": (basic_strategies.apply_strategy_with_volume_and_macd, "Up/Down+Volume+MACD", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range, macd_fast_range, macd_slow_range, macd_signal_range))        
+    }
+
+    if strategies_to_optimize:
+        for name, (strategy_func, description, param_ranges) in strategies_to_optimize.items():
+            # Unpack the parameter ranges as needed for each strategy
+            best_parameters = optimize_strategy(strategy_func, param_ranges)
+            strategy_best_results[name] = (description, best_parameters[0][0], execute_strategy(strategy_func, best_parameters[0][0]))
+            strategy_worst_results[name] = (description, best_parameters[1][0], execute_strategy(strategy_func, best_parameters[1][0]))
 
     # manually set params for a strategy
-    my_params = (0.09, 0.11, 100, 0.11, 11, 23, 12)
-    strategy_best_results['strategy_99'] = ('Up/Down+Volume+MACD', my_params, execute_strategy(all_strategies.apply_strategy_with_volume_and_macd, my_params))
+    # my_params = (0.09, 0.11, 100, 0.11, 11, 23, 12)
+    # strategy_best_results['strategy_99'] = ('Up/Down+Volume+MACD', my_params, execute_strategy(basic_strategies.apply_strategy_with_volume_and_macd, my_params))
+    my_params = (100,)
+    strategy_best_results['strategy_svm'] = ('ML SVM', my_params, execute_strategy(ml_strategies.apply_svm_strategy, my_params))
 
 
-    if os.path.exists(str(start_date.year) + '-strategy_best_results.pkl'):
-        previous_strategy_best_results = joblib.load(str(start_date.year) + '-strategy_best_results.pkl')
+    if os.path.exists(cache_prefix + 'strategy_best_results.pkl'):
+        previous_strategy_best_results = joblib.load(cache_prefix + 'strategy_best_results.pkl')
         strategy_best_results = {**previous_strategy_best_results, **strategy_best_results}
-    if os.path.exists(str(start_date.year) + '-strategy_worst_results.pkl'):
-        previous_strategy_worst_results = joblib.load(str(start_date.year) + '-strategy_worst_results.pkl')
+    if os.path.exists(cache_prefix + 'strategy_worst_results.pkl'):
+        previous_strategy_worst_results = joblib.load(cache_prefix + 'strategy_worst_results.pkl')
         strategy_worst_results = {**previous_strategy_worst_results, **strategy_worst_results}
     # save the best results
-    joblib.dump(strategy_best_results, str(start_date.year) + '-strategy_best_results.pkl')
-    joblib.dump(strategy_worst_results, str(start_date.year) + '-strategy_worst_results.pkl')
+    joblib.dump(strategy_best_results, cache_prefix + 'strategy_best_results.pkl')
+    joblib.dump(strategy_worst_results, cache_prefix + 'strategy_worst_results.pkl')
 
+    # order by strategy_best_results final_portfolio_value
+    strategy_best_results = dict(sorted(strategy_best_results.items(), key=lambda item: item[1][2][0], reverse=True))
     # Print the best results
     for name, (description, params, (final_portfolio_value, portfolio_history_df, _, _)) in strategy_best_results.items():
         print(f"Best parameters for {name}: {params} with final portfolio value: {final_portfolio_value:.2f} USDT")
