@@ -19,7 +19,7 @@ load_dotenv()
 api_key = os.getenv('BINANCE_API_KEY')
 api_secret = os.getenv('BINANCE_API_SECRET')
 enable_cache = False
-start_date = datetime(2020, 1, 1)
+start_date = datetime(2019, 1, 1)
 # Binance Client
 client = Client(api_key, api_secret)
 
@@ -40,7 +40,7 @@ btc_price_df_cache_file = str(start_date.year) + '-btc_price_df_cache.pkl'
 if os.path.exists(btc_price_df_cache_file) and enable_cache:
     btc_price_df = joblib.load(btc_price_df_cache_file)
 else:
-    btc_price_df = get_btc_price_df(start_date, datetime.now(), Client.KLINE_INTERVAL_1DAY)
+    btc_price_df = get_btc_price_df(start_date, datetime.now(), Client.KLINE_INTERVAL_6HOUR)
     joblib.dump(btc_price_df, btc_price_df_cache_file)
 
 
@@ -249,10 +249,10 @@ def main():
     macd_signal_range = np.arange(6, 13, 2)
 
     strategies = {
-        # "strategy_0": (apply_strategy_just_hold, "Only hold", (np.array([0]), initial_owned_usdt_range)),
-        # "strategy_1": (apply_strategy, "Simple up/down", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
-        # "strategy_2": (apply_strategy_with_volume, "Up/Down with volume", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
-        # "strategy_3": (apply_strategy_with_volume_and_macd, "Up/Down+Volume+MACD", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range, macd_fast_range, macd_slow_range, macd_signal_range))        
+        "strategy_0": (apply_strategy_just_hold, "Only hold", (np.array([0]), initial_owned_usdt_range)),
+        "strategy_1": (apply_strategy, "Simple up/down", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range)),
+        "strategy_2": (apply_strategy_with_volume, "Up/Down with volume", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range)),
+        "strategy_3": (apply_strategy_with_volume_and_macd, "Up/Down+Volume+MACD", (sell_percentage_range, buy_percentage_range, initial_owned_usdt_range, volume_factor_range, macd_fast_range, macd_slow_range, macd_signal_range))        
     }
     
     strategy_best_results = {}

@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import joblib
 
-prefix = '2020-'
+prefix = '2019-'
 # btc_price_df = joblib.load('btc_price_df_cache.pkl')
 # strategy_best_results = joblib.load('strategy_best_results.pkl')
 # strategy_worst_results = joblib.load('strategy_worst_results.pkl')
